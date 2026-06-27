@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: "3"
+
+vars:
+  MIGRATION_SCRIPT: ./sqlite/migration.sql
+  BUILD_DIR: bin
+  DB: fran.db
+  BINARY_NAME: fran
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - go-task --list
+    silent: true
+
+  tidy:
+    desc: Clean up and syn go modules
+    cmds:
+      - go mod tidy
+
+  clean:
+    desc: Remove bin and all contents
+    cmds:
+      - rm -rf {{.BUILD_DIR}}
+      - go clean -testcache
+
+  create-tables:
+    desc: Create database tables
+    deps: [DB]
+    cmds:
+      - sqlite3 {{.DB}} < {{.MIGRATION_SCRIPT}}
+
+  build:
+    desc: Build the binary
+    deps: [tidy]
+    cmds:
+      - go build - {{.BUILD_DIR}}/{{.BINARY_NAME}} ./cmd/fran.go
+
+  test:
+    desc: Run unit tests with the race detector
+    cmds:
+      - go test -v -race ./...
