@@ -1,2 +1,3 @@
 # fran
-A minimalist workout tracker
+
+A minimalist workout tracker.
