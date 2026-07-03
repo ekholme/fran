@@ -28,7 +28,6 @@ tasks:
 
   create-tables:
     desc: Create database tables
-    deps: [DB]
     cmds:
       - sqlite3 {{.DB}} < {{.MIGRATION_SCRIPT}}
 
