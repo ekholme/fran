@@ -4,11 +4,11 @@ package ui
 import (
 	"context"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ekholme/fran"
 )
@@ -23,7 +23,7 @@ const (
 
 type WorkoutGetter interface {
 	GetLatestWorkouts(ctx context.Context, n int) ([]*fran.Workout, error)
-	GetWorkoutbyID(ctx context.Context, id int) (*fran.Workout, error)
+	GetWorkoutByID(ctx context.Context, id int) (*fran.Workout, error)
 	GetWorkoutByDate(ctx context.Context, date string) (*fran.Workout, error)
 	GetWorkoutsByShortDesc(ctx context.Context, desc string) ([]*fran.Workout, error)
 }
@@ -151,7 +151,7 @@ func createWorkoutCmd(s WorkoutStore, w *fran.Workout) tea.Cmd {
 func fetchWorkoutCmd(s WorkoutStore, id int) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
-		w, err := s.GetWorkoutbyID(ctx, id)
+		w, err := s.GetWorkoutByID(ctx, id)
 		if err != nil {
 			return err
 		}
@@ -178,7 +178,8 @@ func (m WorkoutModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i, w := range msg.workouts {
 			items[i] = workoutItem{*w}
 		}
-		m.list.SetItems(items)
+		cmd = m.list.SetItems(items)
+		return m, cmd
 
 	case workoutCreatedMsg:
 		// reset form and go back to workout list state
@@ -194,6 +195,7 @@ func (m WorkoutModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selectedWorkout = msg.workout
 
 	case tea.WindowSizeMsg:
+		m.list.SetSize(msg.Width, msg.Height)
 		switch m.state {
 		case stateWorkoutList:
 			return m.updateWorkoutList(msg)
