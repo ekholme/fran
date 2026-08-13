@@ -3,6 +3,8 @@ package ui
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
@@ -237,12 +239,22 @@ func (m WorkoutModel) View() string {
 }
 
 func (m WorkoutModel) viewCreateWorkout() string {
+	date := m.inputs.WorkoutDateInput.Value()
+	validationMsg := ""
+	if date != "" {
+		_, err := time.Parse("2006-01-02", date)
+		if err != nil {
+			validationMsg = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render("\nInvalid Date Format (Expected YYYY-MM-DD)")
+		}
+	}
+
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		"\nCreate New Workout\n",
 		m.inputs.ShortDescriptionInput.View(),
 		m.inputs.LongDescriptionInput.View(),
 		m.inputs.WorkoutDateInput.View(),
+		validationMsg,
 		"\nCtrl+S to save, Esc to cancel",
 	)
 }
@@ -310,10 +322,19 @@ func (m WorkoutModel) updateWorkoutForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.inputs.WorkoutDateInput.Focus()
 			}
 		case "ctrl+s":
+			date := m.inputs.WorkoutDateInput.Value()
+			if date != "" {
+				_, err := time.Parse("2006-01-02", date)
+				if err != nil {
+					m.err = fmt.Errorf("invalid date format")
+					return m, nil
+				}
+			}
+
 			w := &fran.Workout{
 				ShortDescription: m.inputs.ShortDescriptionInput.Value(),
 				LongDescription:  m.inputs.LongDescriptionInput.Value(),
-				WorkoutDate:      m.inputs.WorkoutDateInput.Value(),
+				WorkoutDate:      date,
 			}
 			return m, createWorkoutCmd(m.store, w)
 		}
