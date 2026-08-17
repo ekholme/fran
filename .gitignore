@@ -34,3 +34,6 @@ go.work.sum
 
 # data
 *.db
+
+# anything in the bin folder
+bin/
