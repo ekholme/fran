@@ -4,6 +4,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/ekholme/fran"
 )
@@ -33,12 +34,12 @@ func (s *Storage) CreateWorkout(ctx context.Context, w *fran.Workout) (int, erro
 
 	res, err := s.db.ExecContext(ctx, qry, w.ShortDescription, w.LongDescription, w.WorkoutDate)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to create workout: %w", err)
 	}
 
 	id, err := res.LastInsertId()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to get workout ID after creation: %w", err)
 	}
 
 	return int(id), nil
@@ -59,7 +60,7 @@ func (s *Storage) GetWorkoutByID(ctx context.Context, id int) (*fran.Workout, er
 	var w fran.Workout
 
 	if err := s.db.QueryRowContext(ctx, qry, id).Scan(&w.ID, &w.ShortDescription, &w.LongDescription, &w.WorkoutDate, &w.CreatedAt); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get workout by ID %d: %w", id, err)
 	}
 
 	return &w, nil
@@ -80,7 +81,7 @@ func (s *Storage) GetWorkoutByDate(ctx context.Context, date string) (*fran.Work
 	var w fran.Workout
 
 	if err := s.db.QueryRowContext(ctx, qry, date).Scan(&w.ID, &w.ShortDescription, &w.LongDescription, &w.WorkoutDate, &w.CreatedAt); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get workout by date %s: %w", date, err)
 	}
 
 	return &w, nil
@@ -101,7 +102,7 @@ func (s *Storage) GetLatestWorkouts(ctx context.Context, n int) ([]*fran.Workout
 
 	rows, err := s.db.QueryContext(ctx, qry, n)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get latest workouts: %w", err)
 	}
 
 	defer rows.Close()
@@ -113,14 +114,14 @@ func (s *Storage) GetLatestWorkouts(ctx context.Context, n int) ([]*fran.Workout
 
 		err = rows.Scan(&w.ID, &w.ShortDescription, &w.LongDescription, &w.WorkoutDate, &w.CreatedAt)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to scan workout row: %w", err)
 		}
 
 		workouts = append(workouts, &w)
 	}
 
 	if err = rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error iterating over workouts: %w", err)
 	}
 
 	return workouts, nil
@@ -140,7 +141,7 @@ func (s *Storage) GetWorkoutsByShortDesc(ctx context.Context, desc string) ([]*f
 
 	rows, err := s.db.QueryContext(ctx, qry, desc)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to search workouts by description: %w", err)
 	}
 
 	defer rows.Close()
@@ -152,14 +153,14 @@ func (s *Storage) GetWorkoutsByShortDesc(ctx context.Context, desc string) ([]*f
 
 		err = rows.Scan(&w.ID, &w.ShortDescription, &w.LongDescription, &w.WorkoutDate, &w.CreatedAt)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to scan workout row: %w", err)
 		}
 
 		workouts = append(workouts, &w)
 	}
 
 	if err = rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error iterating over workouts: %w", err)
 	}
 
 	return workouts, nil
@@ -177,12 +178,12 @@ func (s *Storage) UpdateWorkout(ctx context.Context, w *fran.Workout) error {
 
 	res, err := s.db.ExecContext(ctx, qry, w.ShortDescription, w.LongDescription, w.WorkoutDate)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to update workout %d: %w", w.ID, err)
 	}
 
 	rowsAffected, err := res.RowsAffected()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get rows affected after update: %w", err)
 	}
 
 	if rowsAffected != 0 {
@@ -200,12 +201,12 @@ func (s *Storage) DeleteWorkout(ctx context.Context, id int) error {
 
 	res, err := s.db.ExecContext(ctx, qry, id)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to delete workout %d: %w", id, err)
 	}
 
 	rowsAffected, err := res.RowsAffected()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get rows affected after deletion: %w", err)
 	}
 
 	if rowsAffected != 0 {

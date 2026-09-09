@@ -220,7 +220,8 @@ func (m WorkoutModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m WorkoutModel) View() string {
 	if m.err != nil {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render("Error: " + m.err.Error() + "\n\nPress q to quit.")
+		errMsg := m.err.Error()
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render(errMsg + "\n\nPress q to quit.")
 	}
 
 	if m.loading && m.state != stateWorkoutList {
@@ -238,22 +239,50 @@ func (m WorkoutModel) View() string {
 	return ""
 }
 
+func isDateValid(date string) bool {
+	if date == "" {
+		return false
+	}
+	_, err := time.Parse("2006-01-02", date)
+	return err == nil
+}
+
 func (m WorkoutModel) viewCreateWorkout() string {
+	shortDesc := m.inputs.ShortDescriptionInput.Value()
 	date := m.inputs.WorkoutDateInput.Value()
+
+	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	validStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
+
+	var shortDescView string
+	if shortDesc == "" {
+		shortDescView = errorStyle.Render(m.inputs.ShortDescriptionInput.View())
+	} else {
+		shortDescView = validStyle.Render(m.inputs.ShortDescriptionInput.View())
+	}
+
+	var dateView string
+	if date != "" && !isDateValid(date) {
+		dateView = errorStyle.Render(m.inputs.WorkoutDateInput.View())
+	} else if date == "" {
+		dateView = m.inputs.WorkoutDateInput.View()
+	} else {
+		dateView = validStyle.Render(m.inputs.WorkoutDateInput.View())
+	}
+
 	validationMsg := ""
-	if date != "" {
-		_, err := time.Parse("2006-01-02", date)
-		if err != nil {
-			validationMsg = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render("\nInvalid Date Format (Expected YYYY-MM-DD)")
-		}
+	if date != "" && !isDateValid(date) {
+		validationMsg = errorStyle.Render("\nInvalid Date Format (Expected YYYY-MM-DD)")
+	} else if shortDesc == "" {
+		validationMsg = errorStyle.Render("\nShort description is required")
 	}
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		"\nCreate New Workout\n",
-		m.inputs.ShortDescriptionInput.View(),
+		shortDescView,
 		m.inputs.LongDescriptionInput.View(),
-		m.inputs.WorkoutDateInput.View(),
+		dateView,
 		validationMsg,
 		"\nCtrl+S to save, Esc to cancel",
 	)
