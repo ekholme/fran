@@ -60,12 +60,15 @@ type WorkoutModel struct {
 	listLength      int
 	err             error
 	selectedWorkout *fran.Workout
+	allWorkouts     []*fran.Workout
 }
 
 func NewWorkoutModel(s WorkoutStore, listLength int) WorkoutModel {
 	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 
 	l.Title = "Select a Workout"
+	l.SetFilteringEnabled(true)
+	l.SetShowFilter(true)
 
 	// add an entry in the help keybinds to create a new workout
 	createWorkoutKey := key.NewBinding(
@@ -176,6 +179,7 @@ func (m WorkoutModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case workoutsLoadedMsg:
 		m.loading = false
+		m.allWorkouts = msg.workouts
 		items := make([]list.Item, len(msg.workouts))
 		for i, w := range msg.workouts {
 			items[i] = workoutItem{*w}
@@ -204,7 +208,6 @@ func (m WorkoutModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case stateCreateWorkout:
 			return m.updateWorkoutForm(msg)
 		}
-
 	default:
 		switch m.state {
 		case stateWorkoutList:
@@ -270,6 +273,16 @@ func (m WorkoutModel) viewCreateWorkout() string {
 		dateView = validStyle.Render(m.inputs.WorkoutDateInput.View())
 	}
 
+	formBorder := lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		Padding(1, 2)
+
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("69")).
+		MarginBottom(1)
+
 	validationMsg := ""
 	if date != "" && !isDateValid(date) {
 		validationMsg = errorStyle.Render("\nInvalid Date Format (Expected YYYY-MM-DD)")
@@ -277,21 +290,37 @@ func (m WorkoutModel) viewCreateWorkout() string {
 		validationMsg = errorStyle.Render("\nShort description is required")
 	}
 
-	return lipgloss.JoinVertical(
+	formContent := lipgloss.JoinVertical(
 		lipgloss.Left,
-		"\nCreate New Workout\n",
+		titleStyle.Render("Create New Workout"),
 		shortDescView,
 		m.inputs.LongDescriptionInput.View(),
 		dateView,
 		validationMsg,
 		"\nCtrl+S to save, Esc to cancel",
 	)
+
+	return formBorder.Render(formContent)
 }
 
 func (m WorkoutModel) viewWorkout() string {
 	if m.selectedWorkout == nil {
 		return "No workout selected."
 	}
+
+	prevNext := ""
+	for i, w := range m.allWorkouts {
+		if w.ID == m.selectedWorkout.ID && len(m.allWorkouts) > 1 {
+			if i > 0 {
+				prevNext += "\n← Previous: " + m.allWorkouts[i-1].ShortDescription
+			}
+			if i < len(m.allWorkouts)-1 {
+				prevNext += "\n→ Next: " + m.allWorkouts[i+1].ShortDescription
+			}
+			break
+		}
+	}
+
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		"\nWorkout Details\n",
@@ -299,6 +328,7 @@ func (m WorkoutModel) viewWorkout() string {
 		"Date: "+m.selectedWorkout.WorkoutDate,
 		"\nDescription:",
 		m.selectedWorkout.LongDescription,
+		prevNext,
 		"\n\nPress Esc or q to return to list",
 	)
 }
@@ -314,6 +344,16 @@ func (m WorkoutModel) updateWorkoutList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.inputFocusIndex = 0
 			m.inputs.ShortDescriptionInput.Focus()
 			return m, nil
+		case "/":
+			m.list.FilterInput.Focus()
+			return m, nil
+		case "esc":
+			if m.list.FilteringEnabled() && m.list.FilterInput.Focused() {
+				m.list.ResetFilter()
+				m.list.SetFilterText("")
+				m.inputs.ShortDescriptionInput.Focus()
+				return m, fetchLatestWorkoutsCmd(m.store, m.listLength)
+			}
 		case "enter":
 			selected := m.list.SelectedItem().(workoutItem)
 			m.selectedWorkout = &selected.Workout
@@ -403,6 +443,20 @@ func (m WorkoutModel) updateViewWorkout(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = stateWorkoutList
 			m.loading = false
 			return m, nil
+		case "left", "h":
+			for i, w := range m.allWorkouts {
+				if w.ID == m.selectedWorkout.ID && i > 0 {
+					m.selectedWorkout = m.allWorkouts[i-1]
+					return m, fetchWorkoutCmd(m.store, m.selectedWorkout.ID)
+				}
+			}
+		case "right", "l":
+			for i, w := range m.allWorkouts {
+				if w.ID == m.selectedWorkout.ID && i < len(m.allWorkouts)-1 {
+					m.selectedWorkout = m.allWorkouts[i+1]
+					return m, fetchWorkoutCmd(m.store, m.selectedWorkout.ID)
+				}
+			}
 		}
 	}
 	return m, nil

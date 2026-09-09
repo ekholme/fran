@@ -12,13 +12,13 @@ This document outlines a roadmap for improving and extending the Fran workout tr
 
 ### 1.2 Enhanced Navigation & Filtering
 
-[] Integrate the `GetWorkoutsByShortDesc` functionality into the main list view.
-[] Add a search bar or a toggleable filter at the top of the list to quickly find specific workouts.
-[] Add "Previous" and "Next" navigation between workouts in the "View Workout" state.
+[x] Integrate the `GetWorkoutsByShortDesc` functionality into the main list view.
+[x] Add a search bar or a toggleable filter at the top of the list to quickly find specific workouts.
+[x] Add "Previous" and "Next" navigation between workouts in the "View Workout" state.
 
 ### 1.3 Polished UI/UX
 
-[] Use `lipgloss` to add borders and consistent spacing to the "Create Workout" form.
+[x] Use `lipgloss` to add borders and consistent spacing to the "Create Workout" form.
 [] Improve the "View Workout" layout to better handle long descriptions (e.g., using a scrollable area if it exceeds terminal height).
 [] Add a "loading" spinner or progress indicator for database fetches.
 
