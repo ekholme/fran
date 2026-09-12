@@ -351,7 +351,6 @@ func (m WorkoutModel) updateWorkoutList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.list.FilteringEnabled() && m.list.FilterInput.Focused() {
 				m.list.ResetFilter()
 				m.list.SetFilterText("")
-				m.inputs.ShortDescriptionInput.Focus()
 				return m, fetchLatestWorkoutsCmd(m.store, m.listLength)
 			}
 		case "enter":
@@ -391,17 +390,20 @@ func (m WorkoutModel) updateWorkoutForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.inputs.WorkoutDateInput.Focus()
 			}
 		case "ctrl+s":
+			shortDesc := m.inputs.ShortDescriptionInput.Value()
+			if shortDesc == "" {
+				m.err = fmt.Errorf("short description is required")
+				return m, nil
+			}
+
 			date := m.inputs.WorkoutDateInput.Value()
-			if date != "" {
-				_, err := time.Parse("2006-01-02", date)
-				if err != nil {
-					m.err = fmt.Errorf("invalid date format")
-					return m, nil
-				}
+			if date != "" && !isDateValid(date) {
+				m.err = fmt.Errorf("invalid date format")
+				return m, nil
 			}
 
 			w := &fran.Workout{
-				ShortDescription: m.inputs.ShortDescriptionInput.Value(),
+				ShortDescription: shortDesc,
 				LongDescription:  m.inputs.LongDescriptionInput.Value(),
 				WorkoutDate:      date,
 			}

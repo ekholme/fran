@@ -136,10 +136,10 @@ func (s *Storage) GetWorkoutsByShortDesc(ctx context.Context, desc string) ([]*f
 		workout_date,
 		created_at
 		FROM workouts
-		WHERE short_description like (%?%)
+		WHERE short_description LIKE ?
 	`
 
-	rows, err := s.db.QueryContext(ctx, qry, desc)
+	rows, err := s.db.QueryContext(ctx, qry, "%"+desc+"%")
 	if err != nil {
 		return nil, fmt.Errorf("failed to search workouts by description: %w", err)
 	}
@@ -176,7 +176,7 @@ func (s *Storage) UpdateWorkout(ctx context.Context, w *fran.Workout) error {
 		WHERE id = ?
 	`
 
-	res, err := s.db.ExecContext(ctx, qry, w.ShortDescription, w.LongDescription, w.WorkoutDate)
+	res, err := s.db.ExecContext(ctx, qry, w.ShortDescription, w.LongDescription, w.WorkoutDate, w.ID)
 	if err != nil {
 		return fmt.Errorf("failed to update workout %d: %w", w.ID, err)
 	}
@@ -186,7 +186,7 @@ func (s *Storage) UpdateWorkout(ctx context.Context, w *fran.Workout) error {
 		return fmt.Errorf("failed to get rows affected after update: %w", err)
 	}
 
-	if rowsAffected != 0 {
+	if rowsAffected == 0 {
 		return sql.ErrNoRows
 	}
 
@@ -209,7 +209,7 @@ func (s *Storage) DeleteWorkout(ctx context.Context, id int) error {
 		return fmt.Errorf("failed to get rows affected after deletion: %w", err)
 	}
 
-	if rowsAffected != 0 {
+	if rowsAffected == 0 {
 		return sql.ErrNoRows
 	}
 
