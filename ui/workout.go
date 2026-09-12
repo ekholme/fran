@@ -38,10 +38,15 @@ type WorkoutDeleter interface {
 	DeleteWorkout(ctx context.Context, id int) error
 }
 
+type WorkoutUpdater interface {
+	UpdateWorkout(ctx context.Context, w *fran.Workout) error
+}
+
 type WorkoutStore interface {
 	WorkoutGetter
 	WorkoutDeleter
 	WorkoutCreator
+	WorkoutUpdater
 }
 
 type WorkoutModelInputs struct {
@@ -61,6 +66,9 @@ type WorkoutModel struct {
 	err             error
 	selectedWorkout *fran.Workout
 	allWorkouts     []*fran.Workout
+	isEditing       bool
+	editingID       int
+	confirmDelete   bool
 }
 
 func NewWorkoutModel(s WorkoutStore, listLength int) WorkoutModel {
@@ -118,6 +126,10 @@ type workoutsLoadedMsg struct {
 
 type workoutCreatedMsg struct{}
 
+type workoutUpdatedMsg struct{}
+
+type workoutDeletedMsg struct{}
+
 type workoutLoadedMsg struct {
 	workout *fran.Workout
 }
@@ -150,6 +162,26 @@ func createWorkoutCmd(s WorkoutStore, w *fran.Workout) tea.Cmd {
 			return err
 		}
 		return workoutCreatedMsg{}
+	}
+}
+
+func updateWorkoutCmd(s WorkoutStore, w *fran.Workout) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if err := s.UpdateWorkout(ctx, w); err != nil {
+			return err
+		}
+		return workoutUpdatedMsg{}
+	}
+}
+
+func deleteWorkoutCmd(s WorkoutStore, id int) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if err := s.DeleteWorkout(ctx, id); err != nil {
+			return err
+		}
+		return workoutDeletedMsg{}
 	}
 }
 
@@ -187,13 +219,21 @@ func (m WorkoutModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = m.list.SetItems(items)
 		return m, cmd
 
-	case workoutCreatedMsg:
+	case workoutCreatedMsg, workoutUpdatedMsg:
 		// reset form and go back to workout list state
 		m.state = stateWorkoutList
 		m.loading = true
+		m.isEditing = false
+		m.editingID = 0
 		m.inputs.ShortDescriptionInput.Reset()
 		m.inputs.LongDescriptionInput.Reset()
 		m.inputs.WorkoutDateInput.Reset()
+		return m, fetchLatestWorkoutsCmd(m.store, m.listLength)
+
+	case workoutDeletedMsg:
+		m.state = stateWorkoutList
+		m.loading = true
+		m.selectedWorkout = nil
 		return m, fetchLatestWorkoutsCmd(m.store, m.listLength)
 
 	case workoutLoadedMsg:
@@ -290,9 +330,14 @@ func (m WorkoutModel) viewCreateWorkout() string {
 		validationMsg = errorStyle.Render("\nShort description is required")
 	}
 
+	title := "Create New Workout"
+	if m.isEditing {
+		title = "Edit Workout"
+	}
+
 	formContent := lipgloss.JoinVertical(
 		lipgloss.Left,
-		titleStyle.Render("Create New Workout"),
+		titleStyle.Render(title),
 		shortDescView,
 		m.inputs.LongDescriptionInput.View(),
 		dateView,
@@ -321,6 +366,11 @@ func (m WorkoutModel) viewWorkout() string {
 		}
 	}
 
+	help := "\n\nPress e to edit, d to delete, Esc or q to return to list"
+	if m.confirmDelete {
+		help = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render("\n\nDelete this workout? (y/n)")
+	}
+
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		"\nWorkout Details\n",
@@ -329,7 +379,7 @@ func (m WorkoutModel) viewWorkout() string {
 		"\nDescription:",
 		m.selectedWorkout.LongDescription,
 		prevNext,
-		"\n\nPress Esc or q to return to list",
+		help,
 	)
 }
 
@@ -341,7 +391,12 @@ func (m WorkoutModel) updateWorkoutList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "n":
 			m.state = stateCreateWorkout
+			m.isEditing = false
+			m.editingID = 0
 			m.inputFocusIndex = 0
+			m.inputs.ShortDescriptionInput.Reset()
+			m.inputs.LongDescriptionInput.Reset()
+			m.inputs.WorkoutDateInput.Reset()
 			m.inputs.ShortDescriptionInput.Focus()
 			return m, nil
 		case "/":
@@ -375,6 +430,11 @@ func (m WorkoutModel) updateWorkoutForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc":
 			m.state = stateWorkoutList
+			m.isEditing = false
+			m.editingID = 0
+			m.inputs.ShortDescriptionInput.Reset()
+			m.inputs.LongDescriptionInput.Reset()
+			m.inputs.WorkoutDateInput.Reset()
 			return m, nil
 		case "tab":
 			m.inputFocusIndex = (m.inputFocusIndex + 1) % 3
@@ -406,6 +466,11 @@ func (m WorkoutModel) updateWorkoutForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 				ShortDescription: shortDesc,
 				LongDescription:  m.inputs.LongDescriptionInput.Value(),
 				WorkoutDate:      date,
+			}
+
+			if m.isEditing {
+				w.ID = m.editingID
+				return m, updateWorkoutCmd(m.store, w)
 			}
 			return m, createWorkoutCmd(m.store, w)
 		}
@@ -440,10 +505,37 @@ func (m WorkoutModel) updateWorkoutForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m WorkoutModel) updateViewWorkout(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.confirmDelete {
+			switch msg.String() {
+			case "y", "Y":
+				m.confirmDelete = false
+				return m, deleteWorkoutCmd(m.store, m.selectedWorkout.ID)
+			case "n", "N", "esc":
+				m.confirmDelete = false
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "esc", "q":
 			m.state = stateWorkoutList
 			m.loading = false
+			return m, nil
+		case "e":
+			w := m.selectedWorkout
+			m.isEditing = true
+			m.editingID = w.ID
+			m.inputs.ShortDescriptionInput.SetValue(w.ShortDescription)
+			m.inputs.LongDescriptionInput.SetValue(w.LongDescription)
+			m.inputs.WorkoutDateInput.SetValue(w.WorkoutDate)
+			m.inputFocusIndex = 0
+			m.inputs.ShortDescriptionInput.Focus()
+			m.inputs.LongDescriptionInput.Blur()
+			m.inputs.WorkoutDateInput.Blur()
+			m.state = stateCreateWorkout
+			return m, nil
+		case "d":
+			m.confirmDelete = true
 			return m, nil
 		case "left", "h":
 			for i, w := range m.allWorkouts {

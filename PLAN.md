@@ -40,8 +40,8 @@ Found during code review of the current `sqlite` and `ui` packages. Fix these be
 
 ### 1.5 Editing & Deletion
 
-[] Wire the existing `UpdateWorkout` storage method into the UI — e.g. an "edit" keybinding from the "View Workout" state that reopens the create-workout form pre-filled with the selected workout's data. Depends on the Phase 0 `UpdateWorkout` fix.
-[] Wire the existing `DeleteWorkout` storage method into the UI — it's part of the `WorkoutStore` interface but is never called from anywhere. Add a "delete" keybinding with a confirmation step. Depends on the Phase 0 `rowsAffected` fix.
+[x] Wire the existing `UpdateWorkout` storage method into the UI — an "e" keybinding from the "View Workout" state reopens the create-workout form pre-filled with the selected workout's data and saves via `UpdateWorkout` instead of `CreateWorkout`.
+[x] Wire the existing `DeleteWorkout` storage method into the UI — a "d" keybinding from the "View Workout" state prompts "Delete this workout? (y/n)" before calling `DeleteWorkout`.
 
 ### 1.6 Testing
 
