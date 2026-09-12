@@ -24,6 +24,7 @@ Found during code review of the current `sqlite` and `ui` packages. Fix these be
 ### 1.2 Enhanced Navigation & Filtering
 
 [] Wire `GetWorkoutsByShortDesc` into the main list view as a real DB-backed search. Unchecked because the list's `/` filter is currently bubbles/list's built-in client-side filter over the already-loaded page of workouts, not a database search — and the underlying query is broken (see Phase 0).
+[] Add a way to filter the list by `WorkoutType` (e.g. "show only Cardio") now that every workout carries one — natural extension of the DB-backed search above once it exists.
 [x] Add a search bar or a toggleable filter at the top of the list to quickly find specific workouts.
 [x] Add "Previous" and "Next" navigation between workouts in the "View Workout" state. Note: this navigates within `allWorkouts`, the currently loaded page of `listLength` workouts, not the full history — revisit once pagination or real search lands.
 
@@ -32,6 +33,7 @@ Found during code review of the current `sqlite` and `ui` packages. Fix these be
 [x] Use `lipgloss` to add borders and consistent spacing to the "Create Workout" form.
 [] Improve the "View Workout" layout to better handle long descriptions (e.g., using a scrollable area if it exceeds terminal height).
 [] Add a "loading" spinner or progress indicator for database fetches.
+[] Show visible labels next to each type-specific detail field in the create/edit form (`ui/workout.go`'s `detailField`) — today the only cue is placeholder text inside the `textinput`, which disappears once a value is typed, making a filled-in AMRAP/Cardio/Strength form harder to scan than the fixed fields above it.
 
 ### 1.4 Configuration & Defaults
 
@@ -45,21 +47,24 @@ Found during code review of the current `sqlite` and `ui` packages. Fix these be
 
 ### 1.6 Testing
 
-[] Add unit tests for `sqlite.Storage` (e.g. against an in-memory/temp sqlite DB) — there are currently no `*_test.go` files despite `task test`/`just test` running `go test -race ./...`.
-[] Add unit tests for the `ui` package's `Update` logic (state transitions, validation) using a fake `WorkoutStore`.
+[x] Add unit tests for the JSON marshal/unmarshal round-trip of per-type workout details (`workout_test.go`) — covers all 5 `WorkoutType`s plus the unknown-type error path.
+[x] Add unit tests for `sqlite.Storage` against a temp on-disk SQLite DB (`sqlite/storage_test.go`) — covers create/get-by-id/get-by-date/get-latest/search-by-description/update/delete, including the nullable-`details` marshal/scan path for both a populated type (Cardio/EMOM/Strength) and `WorkoutTypeOther`, and the not-found error path for update/delete.
+[x] Add unit tests for `sqlite.EnsureSchema` (`sqlite/migrate_test.go`) — covers migrating a pre-migration schema (backfills `workout_type = 'other'`, `details` stays NULL, `idx_workouts_type` gets created), idempotent re-runs against an already-migrated database, and a no-op run against a freshly created canonical schema.
+[x] Add unit tests for the `ui` package's `Update` logic (`ui/workout_test.go`) using a fake in-memory `WorkoutStore` — covers create validation (short description/date/numeric detail fields), `ctrl+t` type cycling rebuilding `DetailFields` while preserving the fixed fields, Strength's `ctrl+a`/`ctrl+r` add/remove-exercise flow (including the no-op on non-Strength types and the floor of 1 exercise), the edit flow's pre-fill via `newDetailFieldsFromWorkout`, and the delete-confirmation and quit key paths. Test helpers drive real `tea.KeyMsg`s through `Update` and only chase a command's result when it resolves quickly and is one of the app's own message types — bubbles' cursor-blink command blocks on a real ~530ms timer and must never be waited on.
 
 ## Phase 2: Data Model & Functionality Extensions
 
 ### 2.1 Richer Workout Data
 
-[] **Categories/Tags:** Add a tagging system to categorize workouts (e.g., #strength, #cardio, #mobility).
-[] **Sets and Reps:** Introduce a structured way to record sets, reps, and weight (e.g., `Bench Press: 3x10 @ 135lbs`).
-[] **Duration Tracking:** Add a field to track how long a workout lasted.
+[x] **Categories/Tags:** Added a `WorkoutType` (AMRAP/EMOM/Cardio/Strength/Other) instead of free-form tags, selectable in the create/edit form and shown in the list/detail views.
+[x] **Sets and Reps:** Strength workouts now record structured sets/reps/weight/unit per exercise (see the multi-exercise item below); other types get their own structured fields (AMRAP time cap/rounds/extra reps, EMOM interval/duration, Cardio modality/duration/distance/unit) — all stored as JSON in a `details` column.
+[] **Duration Tracking:** Add a field to track how long a workout lasted. Note: EMOM/Cardio now carry a type-specific duration and AMRAP has a time cap; a general duration field for Strength/Other is still open.
+[x] **Multiple exercises per Strength entry:** `StrengthDetails` now holds a list of `StrengthExercise` (name/sets/reps/weight/unit) instead of one flat set of fields, so a session like "Pullup, Pushup, KBS" can be logged as three named movements. The create/edit form gets a repeatable sub-form (`ctrl+a` adds an exercise, `ctrl+r` removes the last). AMRAP/EMOM were left as-is — their numeric fields describe the whole timed circuit rather than a single movement, and the movement list for those still belongs in the free-text long description. Note: this changed `StrengthDetails`'s JSON shape; harmless here since the workouts table was cleared before this landed, but would need a data migration if applied after real Strength entries existed.
 
 ### 2.2 Statistics & Analytics
 
-[] **Summary View:** A new state to view aggregate statistics (e.g., workouts per week, total volume).
-[] **Progress Tracking:** Simple visual indicators of progress over time for specific exercises.
+[] **Summary View:** A new state to view aggregate statistics (e.g., workouts per week, total volume). Now more tractable per-type — e.g. total Cardio distance, or Strength volume by summing `sets * reps * weight` across each entry's `Exercises` — straight from the structured `details` fields instead of parsing free text, though it still requires a query/aggregation layer that doesn't exist yet.
+[] **Progress Tracking:** Simple visual indicators of progress over time for specific exercises. Feasible now that each `StrengthExercise` has a `Name` (e.g. chart weight over time for every entry named "Squat") — still needs a query/aggregation layer, and matching is an exact string match on `Name` with no normalization, so "Squat" and "squat" would count as different exercises.
 
 ### 2.3 Data Portability
 

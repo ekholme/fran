@@ -6,7 +6,7 @@ DB := "fran.db"
 BINARY_NAME := "fran"
 
 default:
-    go-task --list
+    just --list
 
 tidy:
     go mod tidy

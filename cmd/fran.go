@@ -24,6 +24,10 @@ func main() {
 	}
 	defer db.Close()
 
+	if err := sqlite.EnsureSchema(db); err != nil {
+		log.Fatalf("failed to ensure database schema: %v", err)
+	}
+
 	store := sqlite.NewStorage(db)
 	model := ui.NewWorkoutModel(store, 50)
 
