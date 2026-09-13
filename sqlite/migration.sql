@@ -10,5 +10,7 @@ CREATE TABLE IF NOT EXISTS workouts
 );
 
 -- create indexes
+-- idx_workouts_type is created separately, by sqlite.EnsureSchema, after
+-- it has made sure the workout_type column exists — a database predating
+-- that column would fail this statement if it ran here.
 CREATE INDEX IF NOT EXISTS idx_workouts_date ON workouts(workout_date);
-CREATE INDEX IF NOT EXISTS idx_workouts_type ON workouts(workout_type);

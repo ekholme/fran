@@ -416,26 +416,41 @@ type WorkoutModel struct {
 	confirmDelete         bool
 	WorkoutType           fran.WorkoutType
 	strengthExerciseCount int
+	searchInput           textinput.Model
+	searching             bool
+	searchActive          bool
 }
 
 func NewWorkoutModel(s WorkoutStore, listLength int) WorkoutModel {
 	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 
-	l.Title = "Select a Workout"
-	l.SetFilteringEnabled(true)
-	l.SetShowFilter(true)
+	l.Title = workoutListTitle
+	// The list's own built-in filtering is unused — search is handled by
+	// searchInput below and backed by a real database query
+	// (GetWorkoutsByShortDesc) rather than filtering the already-loaded page.
+	l.SetFilteringEnabled(false)
 
-	// add an entry in the help keybinds to create a new workout
+	// add entries in the help keybinds for actions not obvious from the list itself
 	createWorkoutKey := key.NewBinding(
 		key.WithKeys("n"),
 		key.WithHelp("n", "new workout"),
+	)
+	searchKey := key.NewBinding(
+		key.WithKeys("/"),
+		key.WithHelp("/", "search"),
 	)
 
 	l.AdditionalShortHelpKeys = func() []key.Binding {
 		return []key.Binding{
 			createWorkoutKey,
+			searchKey,
 		}
 	}
+
+	// search input init
+	si := textinput.New()
+	si.Prompt = "Search: "
+	si.Placeholder = "short description..."
 
 	// short description init
 	sdi := textinput.New()
@@ -466,11 +481,19 @@ func NewWorkoutModel(s WorkoutStore, listLength int) WorkoutModel {
 		listLength:            listLength,
 		WorkoutType:           fran.WorkoutTypeOther,
 		strengthExerciseCount: 1,
+		searchInput:           si,
 	}
 }
 
+const workoutListTitle = "Select a Workout"
+
 type workoutsLoadedMsg struct {
 	workouts []*fran.Workout
+}
+
+type workoutsSearchedMsg struct {
+	workouts []*fran.Workout
+	query    string
 }
 
 type workoutCreatedMsg struct{}
@@ -489,6 +512,10 @@ type workoutItem struct {
 
 func (i workoutItem) Title() string       { return i.ShortDescription }
 func (i workoutItem) Description() string { return i.WorkoutType.Label() + " · " + i.WorkoutDate }
+
+// FilterValue satisfies list.Item; unused since the list's own built-in
+// filtering is disabled in favor of the database-backed search (see
+// searchInput/searchWorkoutsCmd).
 func (i workoutItem) FilterValue() string { return i.LongDescription }
 
 func fetchLatestWorkoutsCmd(s WorkoutStore, n int) tea.Cmd {
@@ -500,6 +527,18 @@ func fetchLatestWorkoutsCmd(s WorkoutStore, n int) tea.Cmd {
 		}
 
 		return workoutsLoadedMsg{workouts}
+	}
+}
+
+func searchWorkoutsCmd(s WorkoutStore, query string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		workouts, err := s.GetWorkoutsByShortDesc(ctx, query)
+		if err != nil {
+			return err
+		}
+
+		return workoutsSearchedMsg{workouts: workouts, query: query}
 	}
 }
 
@@ -560,6 +599,20 @@ func (m WorkoutModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case workoutsLoadedMsg:
 		m.loading = false
+		m.searchActive = false
+		m.list.Title = workoutListTitle
+		m.allWorkouts = msg.workouts
+		items := make([]list.Item, len(msg.workouts))
+		for i, w := range msg.workouts {
+			items[i] = workoutItem{*w}
+		}
+		cmd = m.list.SetItems(items)
+		return m, cmd
+
+	case workoutsSearchedMsg:
+		m.loading = false
+		m.searchActive = true
+		m.list.Title = fmt.Sprintf("Search: %q (%d result(s), esc to clear)", msg.query, len(msg.workouts))
 		m.allWorkouts = msg.workouts
 		items := make([]list.Item, len(msg.workouts))
 		for i, w := range msg.workouts {
@@ -625,6 +678,9 @@ func (m WorkoutModel) View() string {
 
 	switch m.state {
 	case stateWorkoutList:
+		if m.searching {
+			return lipgloss.JoinVertical(lipgloss.Left, m.searchInput.View(), m.list.View())
+		}
 		return m.list.View()
 	case stateCreateWorkout:
 		return m.viewCreateWorkout()
@@ -767,6 +823,10 @@ func (m WorkoutModel) viewWorkout() string {
 }
 
 func (m WorkoutModel) updateWorkoutList(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.searching {
+		return m.updateSearchInput(msg)
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -786,12 +846,14 @@ func (m WorkoutModel) updateWorkoutList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.inputs.ShortDescriptionInput.Focus()
 			return m, nil
 		case "/":
-			m.list.FilterInput.Focus()
+			m.searching = true
+			m.searchInput.Reset()
+			m.searchInput.Focus()
 			return m, nil
 		case "esc":
-			if m.list.FilteringEnabled() && m.list.FilterInput.Focused() {
-				m.list.ResetFilter()
-				m.list.SetFilterText("")
+			if m.searchActive {
+				m.searchActive = false
+				m.loading = true
 				return m, fetchLatestWorkoutsCmd(m.store, m.listLength)
 			}
 		case "enter":
@@ -805,6 +867,36 @@ func (m WorkoutModel) updateWorkoutList(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
+	return m, cmd
+}
+
+// updateSearchInput handles key input while the search box (opened with
+// "/") is focused, keeping it entirely separate from the list's own
+// (unused) built-in filtering. Enter runs a real GetWorkoutsByShortDesc
+// query against the database rather than filtering the already-loaded
+// page; an empty query on Enter is treated as "show all" instead.
+func (m WorkoutModel) updateSearchInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.String() {
+		case "esc":
+			m.searching = false
+			m.searchInput.Blur()
+			return m, nil
+		case "enter":
+			query := strings.TrimSpace(m.searchInput.Value())
+			m.searching = false
+			m.searchInput.Blur()
+			m.loading = true
+			if query == "" {
+				m.searchActive = false
+				return m, fetchLatestWorkoutsCmd(m.store, m.listLength)
+			}
+			return m, searchWorkoutsCmd(m.store, query)
+		}
+	}
+
+	var cmd tea.Cmd
+	m.searchInput, cmd = m.searchInput.Update(msg)
 	return m, cmd
 }
 

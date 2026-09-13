@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ type fakeStore struct {
 	createErr    error
 	updateErr    error
 	deleteErr    error
+	searchErr    error
 
 	created []*fran.Workout
 	updated []*fran.Workout
@@ -63,7 +65,16 @@ func (f *fakeStore) GetWorkoutByDate(ctx context.Context, date string) (*fran.Wo
 }
 
 func (f *fakeStore) GetWorkoutsByShortDesc(ctx context.Context, desc string) ([]*fran.Workout, error) {
-	return nil, nil
+	if f.searchErr != nil {
+		return nil, f.searchErr
+	}
+	var matches []*fran.Workout
+	for _, w := range f.workouts {
+		if strings.Contains(w.ShortDescription, desc) {
+			matches = append(matches, w)
+		}
+	}
+	return matches, nil
 }
 
 func (f *fakeStore) CreateWorkout(ctx context.Context, w *fran.Workout) (int, error) {
@@ -140,7 +151,7 @@ func keyMsg(s string) tea.KeyMsg {
 // must never be chased).
 func isDomainMsg(msg tea.Msg) bool {
 	switch msg.(type) {
-	case workoutsLoadedMsg, workoutCreatedMsg, workoutUpdatedMsg, workoutDeletedMsg, workoutLoadedMsg, error:
+	case workoutsLoadedMsg, workoutsSearchedMsg, workoutCreatedMsg, workoutUpdatedMsg, workoutDeletedMsg, workoutLoadedMsg, error:
 		return true
 	default:
 		return false
@@ -577,5 +588,115 @@ func TestQuitKeys(t *testing.T) {
 		if cmd == nil {
 			t.Fatalf("key %q: expected a tea.Quit command, got nil", key)
 		}
+	}
+}
+
+func searchTestWorkouts() []*fran.Workout {
+	return []*fran.Workout{
+		{ID: 1, ShortDescription: "KB ABC", WorkoutDate: "2026-09-01", WorkoutType: fran.WorkoutTypeOther},
+		{ID: 2, ShortDescription: "Cardio - run", WorkoutDate: "2026-09-02", WorkoutType: fran.WorkoutTypeOther},
+		{ID: 3, ShortDescription: "KB DEF", WorkoutDate: "2026-09-03", WorkoutType: fran.WorkoutTypeOther},
+	}
+}
+
+func TestSearch_QueriesDatabaseAndDisplaysResults(t *testing.T) {
+	store := newFakeStore()
+	store.workouts = searchTestWorkouts()
+	m := newReadyModel(t, store)
+
+	m = sendKey(t, m, "/")
+	if !m.searching {
+		t.Fatal("searching = false after '/', want true")
+	}
+
+	m = typeText(t, m, "KB")
+	m = sendKey(t, m, "enter")
+
+	if m.searching {
+		t.Error("searching = true after enter, want false")
+	}
+	if !m.searchActive {
+		t.Error("searchActive = false after a non-empty search, want true")
+	}
+	if len(m.allWorkouts) != 2 {
+		t.Fatalf("allWorkouts has %d entries after searching \"KB\", want 2", len(m.allWorkouts))
+	}
+}
+
+func TestSearch_EmptyQueryShowsAllWorkouts(t *testing.T) {
+	store := newFakeStore()
+	store.workouts = searchTestWorkouts()
+	m := newReadyModel(t, store)
+
+	m = sendKey(t, m, "/")
+	m = sendKey(t, m, "enter")
+
+	if m.searching {
+		t.Error("searching = true after enter on an empty query, want false")
+	}
+	if m.searchActive {
+		t.Error("searchActive = true after an empty-query enter, want false (should show all)")
+	}
+	if len(m.allWorkouts) != len(store.workouts) {
+		t.Fatalf("allWorkouts has %d entries, want %d (all workouts)", len(m.allWorkouts), len(store.workouts))
+	}
+}
+
+func TestSearch_EscWhileTypingCancelsWithoutSearching(t *testing.T) {
+	store := newFakeStore()
+	store.workouts = searchTestWorkouts()
+	m := newReadyModel(t, store)
+	originalCount := len(m.allWorkouts)
+
+	m = sendKey(t, m, "/")
+	m = typeText(t, m, "nonexistent query")
+	m = sendKey(t, m, "esc")
+
+	if m.searching {
+		t.Error("searching = true after esc, want false")
+	}
+	if m.searchActive {
+		t.Error("searchActive = true after cancelling with esc, want false")
+	}
+	if len(m.allWorkouts) != originalCount {
+		t.Errorf("allWorkouts changed after cancelling search: got %d, want %d", len(m.allWorkouts), originalCount)
+	}
+}
+
+func TestSearch_EscAfterActiveSearchResetsToLatest(t *testing.T) {
+	store := newFakeStore()
+	store.workouts = searchTestWorkouts()
+	m := newReadyModel(t, store)
+
+	m = sendKey(t, m, "/")
+	m = typeText(t, m, "KB")
+	m = sendKey(t, m, "enter")
+
+	if len(m.allWorkouts) != 2 {
+		t.Fatalf("allWorkouts has %d entries after search, want 2", len(m.allWorkouts))
+	}
+
+	m = sendKey(t, m, "esc")
+
+	if m.searchActive {
+		t.Error("searchActive = true after esc, want false")
+	}
+	if len(m.allWorkouts) != len(store.workouts) {
+		t.Errorf("allWorkouts has %d entries after clearing search, want %d (all workouts)", len(m.allWorkouts), len(store.workouts))
+	}
+}
+
+func TestSearch_ErrorSurfacesToModel(t *testing.T) {
+	store := newFakeStore()
+	store.workouts = searchTestWorkouts()
+	store.searchErr = errors.New("boom")
+	m := newReadyModel(t, store)
+
+	m = sendKey(t, m, "/")
+	m = typeText(t, m, "KB")
+	m = sendKey(t, m, "enter")
+
+	if m.err == nil {
+		t.Fatal("expected m.err to be set after a failing search, got nil")
 	}
 }

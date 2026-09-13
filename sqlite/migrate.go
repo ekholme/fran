@@ -2,18 +2,30 @@ package sqlite
 
 import (
 	"database/sql"
+	_ "embed"
 	"fmt"
 	"strings"
 )
 
-// EnsureSchema brings an existing database up to date with schema changes
-// introduced after its initial creation, without a full migration-runner.
-// ALTER TABLE ADD COLUMN is not idempotent in SQLite, so a "duplicate
-// column name" error (meaning the database is already up to date) is
-// swallowed; any other error is returned. Safe to call on every startup,
-// against either a freshly created database (via migration.sql) or an
-// existing one predating these columns.
+//go:embed migration.sql
+var migrationSQL string
+
+// EnsureSchema brings a database up to date with the current schema,
+// without a full migration-runner. It's safe to call on every startup
+// against any of: a brand-new (even empty-file) database, one already on
+// the canonical schema, or one predating the workout_type/details columns.
+//
+// It first applies migration.sql's CREATE TABLE/INDEX IF NOT EXISTS
+// statements, which bootstrap a brand-new database but are no-ops against
+// an existing one. Then, since SQLite has no ADD COLUMN IF NOT EXISTS, it
+// attempts to add workout_type/details directly, swallowing the resulting
+// "duplicate column name" error on a database that already has them (that
+// error is the only signal SQLite gives for "already up to date" here).
 func EnsureSchema(db *sql.DB) error {
+	if _, err := db.Exec(migrationSQL); err != nil {
+		return fmt.Errorf("failed to apply base schema: %w", err)
+	}
+
 	stmts := []string{
 		`ALTER TABLE workouts ADD COLUMN workout_type TEXT NOT NULL DEFAULT 'other'`,
 		`ALTER TABLE workouts ADD COLUMN details TEXT`,

@@ -191,6 +191,7 @@ func (s *Storage) GetWorkoutsByShortDesc(ctx context.Context, desc string) ([]*f
 		created_at
 		FROM workouts
 		WHERE short_description LIKE ?
+		ORDER BY workout_date DESC
 	`
 
 	rows, err := s.db.QueryContext(ctx, qry, "%"+desc+"%")

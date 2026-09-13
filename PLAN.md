@@ -23,9 +23,9 @@ Found during code review of the current `sqlite` and `ui` packages. Fix these be
 
 ### 1.2 Enhanced Navigation & Filtering
 
-[] Wire `GetWorkoutsByShortDesc` into the main list view as a real DB-backed search. Unchecked because the list's `/` filter is currently bubbles/list's built-in client-side filter over the already-loaded page of workouts, not a database search — and the underlying query is broken (see Phase 0).
-[] Add a way to filter the list by `WorkoutType` (e.g. "show only Cardio") now that every workout carries one — natural extension of the DB-backed search above once it exists.
-[x] Add a search bar or a toggleable filter at the top of the list to quickly find specific workouts.
+[x] Wire `GetWorkoutsByShortDesc` into the main list view as a real DB-backed search. `/` now opens a dedicated search box (`ui/workout.go`'s `searchInput`/`updateSearchInput`), separate from bubbles/list's own filtering; `enter` runs `GetWorkoutsByShortDesc` against the full database (not just the loaded page) and replaces the list, `esc` clears an active search back to `GetLatestWorkouts`. Also added `ORDER BY workout_date DESC` to `GetWorkoutsByShortDesc` for consistency with the rest of the app. **Bug found while implementing this:** the previously-checked "search bar" below was actually non-functional — `/` called `m.list.FilterInput.Focus()` directly instead of going through the list's own `Filter` keybinding, so bubbles/list's internal `filterState` never left `Unfiltered`; the filter box never rendered and typed characters never reached it. Replaced rather than fixed, since a real DB search is strictly better than a working client-side one limited to the loaded page.
+[] Add a way to filter the list by `WorkoutType` (e.g. "show only Cardio") now that every workout carries one — natural extension of the search above.
+[x] ~~Add a search bar or a toggleable filter at the top of the list to quickly find specific workouts.~~ Superseded by the DB-backed search above (see the bug note there) — bubbles/list's built-in filtering is now explicitly disabled (`SetFilteringEnabled(false)`).
 [x] Add "Previous" and "Next" navigation between workouts in the "View Workout" state. Note: this navigates within `allWorkouts`, the currently loaded page of `listLength` workouts, not the full history — revisit once pagination or real search lands.
 
 ### 1.3 Polished UI/UX

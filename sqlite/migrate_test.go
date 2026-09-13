@@ -95,3 +95,46 @@ func TestEnsureSchema_NoOpOnFreshCanonicalSchema(t *testing.T) {
 		t.Fatalf("EnsureSchema() on a fresh canonical schema returned error: %v", err)
 	}
 }
+
+// TestEnsureSchema_BootstrapsEmptyDatabase covers the first-run case for a
+// brand-new database file with no schema applied at all (e.g. a fresh XDG
+// data directory) — EnsureSchema must create the workouts table itself
+// rather than assuming something already ran migration.sql.
+func TestEnsureSchema_BootstrapsEmptyDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fran_test.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open empty test database: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	if err := EnsureSchema(db); err != nil {
+		t.Fatalf("EnsureSchema() on an empty database returned error: %v", err)
+	}
+
+	res, err := db.Exec(`INSERT INTO workouts (short_description, long_description, workout_date) VALUES (?, ?, ?)`,
+		"Morning run", "easy pace", "2026-09-12")
+	if err != nil {
+		t.Fatalf("failed to insert into bootstrapped table: %v", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("failed to get inserted row id: %v", err)
+	}
+
+	var workoutType string
+	if err := db.QueryRow(`SELECT workout_type FROM workouts WHERE id = ?`, id).Scan(&workoutType); err != nil {
+		t.Fatalf("failed to read back bootstrapped row: %v", err)
+	}
+	if workoutType != "other" {
+		t.Errorf("workout_type = %q, want default %q", workoutType, "other")
+	}
+
+	for _, indexName := range []string{"idx_workouts_date", "idx_workouts_type"} {
+		var name string
+		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?`, indexName).Scan(&name)
+		if err != nil {
+			t.Errorf("expected %s index to exist after bootstrapping, query returned: %v", indexName, err)
+		}
+	}
+}
