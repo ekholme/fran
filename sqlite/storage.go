@@ -226,6 +226,53 @@ func (s *Storage) GetWorkoutsByShortDesc(ctx context.Context, desc string) ([]*f
 	return workouts, nil
 }
 
+// GetWorkoutsByDateRange retrieves all workouts whose workout date falls between start and end (inclusive, both YYYY-MM-DD), ordered by workout date in ascending order.
+func (s *Storage) GetWorkoutsByDateRange(ctx context.Context, start, end string) ([]*fran.Workout, error) {
+	qry := `
+		SELECT id,
+		short_description,
+		long_description,
+		workout_date,
+		workout_type,
+		details,
+		created_at
+		FROM workouts
+		WHERE workout_date BETWEEN ? AND ?
+		ORDER BY workout_date ASC, id ASC
+	`
+
+	rows, err := s.db.QueryContext(ctx, qry, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workouts by date range: %w", err)
+	}
+
+	defer rows.Close()
+
+	var workouts []*fran.Workout
+
+	for rows.Next() {
+		var w fran.Workout
+		var detailsRaw sql.NullString
+
+		err = rows.Scan(&w.ID, &w.ShortDescription, &w.LongDescription, &w.WorkoutDate, &w.WorkoutType, &detailsRaw, &w.CreatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan workout row: %w", err)
+		}
+
+		if err := applyDetails(&w, detailsRaw); err != nil {
+			return nil, err
+		}
+
+		workouts = append(workouts, &w)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating over workouts: %w", err)
+	}
+
+	return workouts, nil
+}
+
 // UpdateWorkout updates the details of an existing workout in the database based on its ID.
 func (s *Storage) UpdateWorkout(ctx context.Context, w *fran.Workout) error {
 	details, err := nullableDetails(w)

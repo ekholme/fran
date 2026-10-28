@@ -189,6 +189,38 @@ func TestGetWorkoutsByShortDesc(t *testing.T) {
 	}
 }
 
+func TestGetWorkoutsByDateRange(t *testing.T) {
+	s := newTestStorage(t)
+	ctx := context.Background()
+
+	dates := []string{"2026-08-31", "2026-09-15", "2026-09-01", "2026-09-30", "2026-10-01", ""}
+	for _, d := range dates {
+		w := &fran.Workout{
+			ShortDescription: "workout " + d,
+			WorkoutDate:      d,
+			WorkoutType:      fran.WorkoutTypeOther,
+		}
+		if _, err := s.CreateWorkout(ctx, w); err != nil {
+			t.Fatalf("CreateWorkout(%q) returned error: %v", d, err)
+		}
+	}
+
+	got, err := s.GetWorkoutsByDateRange(ctx, "2026-09-01", "2026-09-30")
+	if err != nil {
+		t.Fatalf("GetWorkoutsByDateRange() returned error: %v", err)
+	}
+
+	want := []string{"2026-09-01", "2026-09-15", "2026-09-30"}
+	if len(got) != len(want) {
+		t.Fatalf("GetWorkoutsByDateRange() returned %d workouts, want %d", len(got), len(want))
+	}
+	for i, w := range got {
+		if w.WorkoutDate != want[i] {
+			t.Errorf("workout %d date = %q, want %q (inclusive range, ascending order)", i, w.WorkoutDate, want[i])
+		}
+	}
+}
+
 func TestUpdateWorkout(t *testing.T) {
 	s := newTestStorage(t)
 	ctx := context.Background()

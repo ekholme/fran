@@ -23,6 +23,7 @@ const (
 	stateWorkoutList sessionState = iota
 	stateCreateWorkout
 	stateViewWorkout
+	stateCalendar
 )
 
 type WorkoutGetter interface {
@@ -30,6 +31,7 @@ type WorkoutGetter interface {
 	GetWorkoutByID(ctx context.Context, id int) (*fran.Workout, error)
 	GetWorkoutByDate(ctx context.Context, date string) (*fran.Workout, error)
 	GetWorkoutsByShortDesc(ctx context.Context, desc string) ([]*fran.Workout, error)
+	GetWorkoutsByDateRange(ctx context.Context, start, end string) ([]*fran.Workout, error)
 }
 
 type WorkoutCreator interface {
@@ -419,6 +421,13 @@ type WorkoutModel struct {
 	searchInput           textinput.Model
 	searching             bool
 	searchActive          bool
+	// returnState is the browse screen (list or calendar) that the view
+	// and form screens go back to when they're left.
+	returnState      sessionState
+	calendarMonth    time.Time // first day of the month shown
+	calendarCursor   time.Time // the selected day
+	calendarWorkouts []*fran.Workout
+	calendarDayIndex int // which of the selected day's workouts enter opens
 }
 
 func NewWorkoutModel(s WorkoutStore, listLength int) WorkoutModel {
@@ -439,11 +448,16 @@ func NewWorkoutModel(s WorkoutStore, listLength int) WorkoutModel {
 		key.WithKeys("/"),
 		key.WithHelp("/", "search"),
 	)
+	calendarKey := key.NewBinding(
+		key.WithKeys("c"),
+		key.WithHelp("c", "calendar"),
+	)
 
 	l.AdditionalShortHelpKeys = func() []key.Binding {
 		return []key.Binding{
 			createWorkoutKey,
 			searchKey,
+			calendarKey,
 		}
 	}
 
@@ -622,24 +636,34 @@ func (m WorkoutModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case workoutCreatedMsg, workoutUpdatedMsg:
-		// reset form and go back to workout list state
-		m.state = stateWorkoutList
+		// reset form and go back to whichever browse screen it came from
+		m = m.resetWorkoutForm()
+		m.state = m.returnState
+		if m.returnState == stateCalendar {
+			return m, fetchCalendarMonthCmd(m.store, m.calendarMonth)
+		}
 		m.loading = true
-		m.isEditing = false
-		m.editingID = 0
-		m.WorkoutType = fran.WorkoutTypeOther
-		m.strengthExerciseCount = 1
-		m.inputs.DetailFields = nil
-		m.inputs.ShortDescriptionInput.Reset()
-		m.inputs.LongDescriptionInput.Reset()
-		m.inputs.WorkoutDateInput.Reset()
 		return m, fetchLatestWorkoutsCmd(m.store, m.listLength)
 
 	case workoutDeletedMsg:
-		m.state = stateWorkoutList
-		m.loading = true
+		m.state = m.returnState
 		m.selectedWorkout = nil
+		if m.returnState == stateCalendar {
+			m.calendarDayIndex = 0
+			return m, fetchCalendarMonthCmd(m.store, m.calendarMonth)
+		}
+		m.loading = true
 		return m, fetchLatestWorkoutsCmd(m.store, m.listLength)
+
+	case calendarLoadedMsg:
+		// ignore a stale response for a month the user has already left
+		if msg.month.Equal(m.calendarMonth) {
+			m.calendarWorkouts = msg.workouts
+			if m.calendarDayIndex >= len(m.calendarWorkoutsOn(m.calendarCursor)) {
+				m.calendarDayIndex = 0
+			}
+		}
+		return m, nil
 
 	case workoutLoadedMsg:
 		m.loading = false
@@ -661,6 +685,8 @@ func (m WorkoutModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateWorkoutForm(msg)
 		case stateViewWorkout:
 			return m.updateViewWorkout(msg)
+		case stateCalendar:
+			return m.updateCalendar(msg)
 		}
 	}
 	return m, cmd
@@ -672,7 +698,7 @@ func (m WorkoutModel) View() string {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render(errMsg + "\n\nPress q to quit.")
 	}
 
-	if m.loading && m.state != stateWorkoutList {
+	if m.loading && m.state != stateWorkoutList && m.state != stateCalendar {
 		return "Loading..."
 	}
 
@@ -686,6 +712,8 @@ func (m WorkoutModel) View() string {
 		return m.viewCreateWorkout()
 	case stateViewWorkout:
 		return m.viewWorkout()
+	case stateCalendar:
+		return m.viewCalendar()
 	}
 	return ""
 }
@@ -791,19 +819,24 @@ func (m WorkoutModel) viewWorkout() string {
 	w := m.selectedWorkout
 
 	prevNext := ""
-	for i, ww := range m.allWorkouts {
-		if ww.ID == w.ID && len(m.allWorkouts) > 1 {
+	browse := m.browseWorkouts()
+	for i, ww := range browse {
+		if ww.ID == w.ID && len(browse) > 1 {
 			if i > 0 {
-				prevNext += "\n← Previous: " + m.allWorkouts[i-1].ShortDescription
+				prevNext += "\n← Previous: " + browse[i-1].ShortDescription
 			}
-			if i < len(m.allWorkouts)-1 {
-				prevNext += "\n→ Next: " + m.allWorkouts[i+1].ShortDescription
+			if i < len(browse)-1 {
+				prevNext += "\n→ Next: " + browse[i+1].ShortDescription
 			}
 			break
 		}
 	}
 
-	help := "\n\nPress e to edit, d to delete, Esc or q to return to list"
+	back := "list"
+	if m.returnState == stateCalendar {
+		back = "calendar"
+	}
+	help := "\n\nPress e to edit, d to delete, Esc or q to return to " + back
 	if m.confirmDelete {
 		help = lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Render("\n\nDelete this workout? (y/n)")
 	}
@@ -822,6 +855,24 @@ func (m WorkoutModel) viewWorkout() string {
 	)
 }
 
+// resetWorkoutForm clears the create/edit form and its edit/type state so
+// nothing bleeds into the next create, focusing the first input.
+func (m WorkoutModel) resetWorkoutForm() WorkoutModel {
+	m.isEditing = false
+	m.editingID = 0
+	m.WorkoutType = fran.WorkoutTypeOther
+	m.strengthExerciseCount = 1
+	m.inputs.DetailFields = nil
+	m.inputFocusIndex = 0
+	m.inputs.ShortDescriptionInput.Reset()
+	m.inputs.LongDescriptionInput.Reset()
+	m.inputs.WorkoutDateInput.Reset()
+	m.inputs.ShortDescriptionInput.Focus()
+	m.inputs.LongDescriptionInput.Blur()
+	m.inputs.WorkoutDateInput.Blur()
+	return m
+}
+
 func (m WorkoutModel) updateWorkoutList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.searching {
 		return m.updateSearchInput(msg)
@@ -833,18 +884,12 @@ func (m WorkoutModel) updateWorkoutList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			return m, tea.Quit
 		case "n":
+			m = m.resetWorkoutForm()
+			m.returnState = stateWorkoutList
 			m.state = stateCreateWorkout
-			m.isEditing = false
-			m.editingID = 0
-			m.WorkoutType = fran.WorkoutTypeOther
-			m.strengthExerciseCount = 1
-			m.inputs.DetailFields = nil
-			m.inputFocusIndex = 0
-			m.inputs.ShortDescriptionInput.Reset()
-			m.inputs.LongDescriptionInput.Reset()
-			m.inputs.WorkoutDateInput.Reset()
-			m.inputs.ShortDescriptionInput.Focus()
 			return m, nil
+		case "c":
+			return m.openCalendar(now())
 		case "/":
 			m.searching = true
 			m.searchInput.Reset()
@@ -857,7 +902,11 @@ func (m WorkoutModel) updateWorkoutList(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, fetchLatestWorkoutsCmd(m.store, m.listLength)
 			}
 		case "enter":
-			selected := m.list.SelectedItem().(workoutItem)
+			selected, ok := m.list.SelectedItem().(workoutItem)
+			if !ok {
+				return m, nil
+			}
+			m.returnState = stateWorkoutList
 			m.selectedWorkout = &selected.Workout
 			m.state = stateViewWorkout
 			m.loading = true
@@ -907,15 +956,8 @@ func (m WorkoutModel) updateWorkoutForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":
-			m.state = stateWorkoutList
-			m.isEditing = false
-			m.editingID = 0
-			m.WorkoutType = fran.WorkoutTypeOther
-			m.strengthExerciseCount = 1
-			m.inputs.DetailFields = nil
-			m.inputs.ShortDescriptionInput.Reset()
-			m.inputs.LongDescriptionInput.Reset()
-			m.inputs.WorkoutDateInput.Reset()
+			m = m.resetWorkoutForm()
+			m.state = m.returnState
 			return m, nil
 		case "ctrl+t":
 			m.WorkoutType = nextWorkoutType(m.WorkoutType)
@@ -1046,7 +1088,7 @@ func (m WorkoutModel) updateViewWorkout(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "esc", "q":
-			m.state = stateWorkoutList
+			m.state = m.returnState
 			m.loading = false
 			return m, nil
 		case "e":
@@ -1068,16 +1110,18 @@ func (m WorkoutModel) updateViewWorkout(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.confirmDelete = true
 			return m, nil
 		case "left", "h":
-			for i, w := range m.allWorkouts {
+			browse := m.browseWorkouts()
+			for i, w := range browse {
 				if w.ID == m.selectedWorkout.ID && i > 0 {
-					m.selectedWorkout = m.allWorkouts[i-1]
+					m.selectedWorkout = browse[i-1]
 					return m, fetchWorkoutCmd(m.store, m.selectedWorkout.ID)
 				}
 			}
 		case "right", "l":
-			for i, w := range m.allWorkouts {
-				if w.ID == m.selectedWorkout.ID && i < len(m.allWorkouts)-1 {
-					m.selectedWorkout = m.allWorkouts[i+1]
+			browse := m.browseWorkouts()
+			for i, w := range browse {
+				if w.ID == m.selectedWorkout.ID && i < len(browse)-1 {
+					m.selectedWorkout = browse[i+1]
 					return m, fetchWorkoutCmd(m.store, m.selectedWorkout.ID)
 				}
 			}

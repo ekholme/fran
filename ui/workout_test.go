@@ -77,6 +77,16 @@ func (f *fakeStore) GetWorkoutsByShortDesc(ctx context.Context, desc string) ([]
 	return matches, nil
 }
 
+func (f *fakeStore) GetWorkoutsByDateRange(ctx context.Context, start, end string) ([]*fran.Workout, error) {
+	var matches []*fran.Workout
+	for _, w := range f.workouts {
+		if w.WorkoutDate >= start && w.WorkoutDate <= end {
+			matches = append(matches, w)
+		}
+	}
+	return matches, nil
+}
+
 func (f *fakeStore) CreateWorkout(ctx context.Context, w *fran.Workout) (int, error) {
 	if f.createErr != nil {
 		return 0, f.createErr
@@ -140,6 +150,10 @@ func keyMsg(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyLeft}
 	case "right":
 		return tea.KeyMsg{Type: tea.KeyRight}
+	case "up":
+		return tea.KeyMsg{Type: tea.KeyUp}
+	case "down":
+		return tea.KeyMsg{Type: tea.KeyDown}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
@@ -151,7 +165,7 @@ func keyMsg(s string) tea.KeyMsg {
 // must never be chased).
 func isDomainMsg(msg tea.Msg) bool {
 	switch msg.(type) {
-	case workoutsLoadedMsg, workoutsSearchedMsg, workoutCreatedMsg, workoutUpdatedMsg, workoutDeletedMsg, workoutLoadedMsg, error:
+	case workoutsLoadedMsg, workoutsSearchedMsg, calendarLoadedMsg, workoutCreatedMsg, workoutUpdatedMsg, workoutDeletedMsg, workoutLoadedMsg, error:
 		return true
 	default:
 		return false
@@ -698,5 +712,191 @@ func TestSearch_ErrorSurfacesToModel(t *testing.T) {
 
 	if m.err == nil {
 		t.Fatal("expected m.err to be set after a failing search, got nil")
+	}
+}
+
+// calendarToday is the fixed "today" the calendar tests pin the clock to.
+var calendarToday = time.Date(2026, time.September, 16, 9, 0, 0, 0, time.Local)
+
+// pinCalendarClock fixes the calendar's clock at calendarToday for the
+// duration of the test.
+func pinCalendarClock(t *testing.T) {
+	t.Helper()
+	orig := now
+	now = func() time.Time { return calendarToday }
+	t.Cleanup(func() { now = orig })
+}
+
+// calendarTestWorkouts returns two workouts on calendarToday, one the day
+// after, and one the month before.
+func calendarTestWorkouts() []*fran.Workout {
+	return []*fran.Workout{
+		{ID: 1, ShortDescription: "Morning run", WorkoutDate: "2026-09-16", WorkoutType: fran.WorkoutTypeCardio},
+		{ID: 2, ShortDescription: "Evening lift", WorkoutDate: "2026-09-16", WorkoutType: fran.WorkoutTypeStrength},
+		{ID: 3, ShortDescription: "Next day AMRAP", WorkoutDate: "2026-09-17", WorkoutType: fran.WorkoutTypeAMRAP},
+		{ID: 4, ShortDescription: "Last month EMOM", WorkoutDate: "2026-08-20", WorkoutType: fran.WorkoutTypeEMOM},
+	}
+}
+
+func TestCalendar_OpensOnCurrentMonth(t *testing.T) {
+	pinCalendarClock(t)
+	store := newFakeStore()
+	store.workouts = calendarTestWorkouts()
+	m := newReadyModel(t, store)
+
+	m = sendKey(t, m, "c")
+
+	if m.state != stateCalendar {
+		t.Fatalf("state = %v after 'c', want stateCalendar", m.state)
+	}
+	if got, want := m.calendarCursor.Format(dateLayout), calendarToday.Format(dateLayout); got != want {
+		t.Errorf("calendarCursor = %s, want today (%s)", got, want)
+	}
+	for _, w := range m.calendarWorkouts {
+		if w.ID == 4 {
+			t.Error("calendarWorkouts includes last month's workout, want only the current month")
+		}
+	}
+	if got := len(m.calendarWorkoutsOn(m.calendarCursor)); got != 2 {
+		t.Errorf("calendarWorkoutsOn(today) returned %d workouts, want 2", got)
+	}
+	if !strings.Contains(m.View(), calendarToday.Format("January 2006")) {
+		t.Error("calendar view doesn't show the current month's title")
+	}
+}
+
+func TestCalendar_MonthNavigationRefetches(t *testing.T) {
+	pinCalendarClock(t)
+	store := newFakeStore()
+	store.workouts = calendarTestWorkouts()
+	m := newReadyModel(t, store)
+
+	m = sendKey(t, m, "c")
+	m = sendKey(t, m, "[")
+
+	wantMonth := firstOfMonth(calendarToday.AddDate(0, -1, 0))
+	if !m.calendarMonth.Equal(wantMonth) {
+		t.Fatalf("calendarMonth = %s after '[', want %s", m.calendarMonth, wantMonth)
+	}
+	if len(m.calendarWorkouts) != 1 || m.calendarWorkouts[0].ID != 4 {
+		t.Errorf("calendarWorkouts after '[' = %v, want only last month's workout", m.calendarWorkouts)
+	}
+
+	m = sendKey(t, m, "t")
+	if got, want := m.calendarCursor.Format(dateLayout), calendarToday.Format(dateLayout); got != want {
+		t.Errorf("calendarCursor = %s after 't', want today (%s)", got, want)
+	}
+	if !m.calendarMonth.Equal(firstOfMonth(calendarToday)) {
+		t.Errorf("calendarMonth = %s after 't', want the current month", m.calendarMonth)
+	}
+}
+
+func TestCalendar_DayMovementCrossesMonths(t *testing.T) {
+	pinCalendarClock(t)
+	store := newFakeStore()
+	m := newReadyModel(t, store)
+
+	m = sendKey(t, m, "c")
+	start := m.calendarCursor
+
+	m = sendKey(t, m, "down")
+	if got, want := m.calendarCursor, start.AddDate(0, 0, 7); !got.Equal(want) {
+		t.Errorf("calendarCursor = %s after down, want %s", got, want)
+	}
+	if !m.calendarMonth.Equal(firstOfMonth(m.calendarCursor)) {
+		t.Errorf("calendarMonth = %s, want the cursor's month %s", m.calendarMonth, firstOfMonth(m.calendarCursor))
+	}
+
+	m = sendKey(t, m, "k")
+	m = sendKey(t, m, "l")
+	m = sendKey(t, m, "h")
+	if !m.calendarCursor.Equal(start) {
+		t.Errorf("calendarCursor = %s after down/k/l/h, want back at %s", m.calendarCursor, start)
+	}
+}
+
+func TestCalendar_EnterOpensSelectedWorkoutAndEscReturnsToCalendar(t *testing.T) {
+	pinCalendarClock(t)
+	store := newFakeStore()
+	store.workouts = calendarTestWorkouts()
+	m := newReadyModel(t, store)
+
+	m = sendKey(t, m, "c")
+	m = sendKey(t, m, "tab")
+	m = sendKey(t, m, "enter")
+
+	if m.state != stateViewWorkout {
+		t.Fatalf("state = %v after enter, want stateViewWorkout", m.state)
+	}
+	if m.selectedWorkout == nil || m.selectedWorkout.ID != 2 {
+		t.Fatalf("selectedWorkout = %+v, want the day's second workout (ID 2) after tab", m.selectedWorkout)
+	}
+
+	// previous/next step through the calendar month, not the list page
+	m = sendKey(t, m, "right")
+	if m.selectedWorkout.ID != 3 {
+		t.Errorf("selectedWorkout ID = %d after right, want 3 (next in the month)", m.selectedWorkout.ID)
+	}
+
+	m = sendKey(t, m, "esc")
+	if m.state != stateCalendar {
+		t.Errorf("state = %v after esc from view, want stateCalendar", m.state)
+	}
+}
+
+func TestCalendar_EnterOnEmptyDayIsNoop(t *testing.T) {
+	pinCalendarClock(t)
+	store := newFakeStore()
+	m := newReadyModel(t, store)
+
+	m = sendKey(t, m, "c")
+	m = sendKey(t, m, "enter")
+
+	if m.state != stateCalendar {
+		t.Errorf("state = %v after enter on an empty day, want stateCalendar", m.state)
+	}
+}
+
+func TestCalendar_NewWorkoutPrefillsDateAndReturnsToCalendar(t *testing.T) {
+	pinCalendarClock(t)
+	store := newFakeStore()
+	m := newReadyModel(t, store)
+
+	m = sendKey(t, m, "c")
+	m = sendKey(t, m, "n")
+
+	if m.state != stateCreateWorkout {
+		t.Fatalf("state = %v after 'n' in calendar, want stateCreateWorkout", m.state)
+	}
+	today := calendarToday.Format(dateLayout)
+	if got := m.inputs.WorkoutDateInput.Value(); got != today {
+		t.Errorf("WorkoutDateInput = %q, want the selected day %q", got, today)
+	}
+
+	m = typeText(t, m, "Calendar workout")
+	m = sendKey(t, m, "ctrl+s")
+
+	if m.state != stateCalendar {
+		t.Fatalf("state = %v after saving, want stateCalendar", m.state)
+	}
+	if got := m.calendarWorkoutsOn(m.calendarCursor); len(got) != 1 || got[0].ShortDescription != "Calendar workout" {
+		t.Errorf("calendarWorkoutsOn(today) = %v, want the newly created workout", got)
+	}
+}
+
+func TestCalendar_EscReturnsToListAndRefreshes(t *testing.T) {
+	pinCalendarClock(t)
+	store := newFakeStore()
+	m := newReadyModel(t, store)
+
+	m = sendKey(t, m, "c")
+	store.workouts = calendarTestWorkouts()
+	m = sendKey(t, m, "esc")
+
+	if m.state != stateWorkoutList {
+		t.Fatalf("state = %v after esc from calendar, want stateWorkoutList", m.state)
+	}
+	if len(m.allWorkouts) != len(store.workouts) {
+		t.Errorf("allWorkouts has %d entries, want %d (refetched on return)", len(m.allWorkouts), len(store.workouts))
 	}
 }
